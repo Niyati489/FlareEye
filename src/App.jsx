@@ -397,35 +397,51 @@ function App() {
                     )}
 
                     {/* THERMAL DETECTIONS */}
-                    {showDetections &&
-                      detections.map((point) => (
-                        <CircleMarker
-                          key={point.id}
-                          center={[
-                            point.lat,
-                            point.lng,
-                          ]}
-                          radius={5}
-                          pathOptions={{
-                            color: "#ff5b35",
-                            fillColor: "#ff5b35",
-                            fillOpacity: 0.75,
-                            weight: 1,
-                          }}
-                        >
-                          <Popup>
-                            <b>{point.id}</b>
-                            <br />
-                            FRP: {point.frp} MW
-                            <br />
-                            Brightness Temp:{" "}
-                            {point.temp} K
-                            <br />
-                            Confidence:{" "}
-                            {point.confidence || 86}%
-                          </Popup>
-                        </CircleMarker>
-                      ))}
+                   {showDetections &&
+  detections.map((d) => (
+    <CircleMarker
+      key={d.id}
+      center={[d.lat, d.lng]}
+      radius={6}
+      pathOptions={{
+        color: "red",
+        fillColor: "red",
+        fillOpacity: 0.8,
+      }}
+    >
+      <Popup>
+        <div style={{ minWidth: "180px" }}>
+          <h3 style={{ margin: "0 0 8px 0" }}>
+            Thermal Detection {d.id}
+          </h3>
+
+          <p>
+            <strong>Latitude:</strong> {d.lat}
+          </p>
+
+          <p>
+            <strong>Longitude:</strong> {d.lng}
+          </p>
+
+          <p>
+            <strong>FRP:</strong> {d.frp} MW
+          </p>
+
+          <p>
+            <strong>Temperature:</strong> {d.temp} K
+          </p>
+
+          <p>
+            <strong>Confidence:</strong> {d.confidence}%
+          </p>
+
+          <p style={{ marginBottom: 0 }}>
+            <strong>Status:</strong> Thermal Anomaly
+          </p>
+        </div>
+      </Popup>
+    </CircleMarker>
+  ))}
 
                     {/* EVENTS */}
                     {processedEvents.map((event) => (
