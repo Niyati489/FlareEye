@@ -1,5 +1,4 @@
-
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 
 import {
   MapContainer,
@@ -54,6 +53,14 @@ function App() {
   const [search, setSearch] = useState("");
   const [riskFilter, setRiskFilter] = useState("ALL");
   const [showFacilities, setShowFacilities] = useState(true);
+  const [darkMode, setDarkMode] = useState(() => {
+    return localStorage.getItem("flareeye-theme") !== "light";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("flareeye-theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
+
 
   const processedEvents = useMemo(() => {
     return eventSeeds.map((seed, index) => {
@@ -183,7 +190,7 @@ function App() {
   );
 
   return (
-    <div className="app">
+    <div className={`app ${darkMode ? "dark-mode" : "light-mode"}`}>
       {/* SIDEBAR */}
       <aside className="sidebar">
         <div className="brand">
@@ -262,6 +269,14 @@ function App() {
             <span className="demo-badge">
               DEMO DATA
             </span>
+
+            <button
+              className="theme-toggle"
+              onClick={() => setDarkMode(!darkMode)}
+              title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+            >
+              {darkMode ? "☀️ Light" : "🌙 Dark"}
+            </button>
 
             <button
               className="reset-btn"
