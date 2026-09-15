@@ -1,10 +1,11 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 
 import {
   MapContainer,
   TileLayer,
   CircleMarker,
   Marker,
+  Circle,
   Popup,
   useMap,
 } from "react-leaflet";
@@ -53,14 +54,23 @@ function App() {
   const [search, setSearch] = useState("");
   const [riskFilter, setRiskFilter] = useState("ALL");
   const [showFacilities, setShowFacilities] = useState(true);
-  const [darkMode, setDarkMode] = useState(() => {
-    return localStorage.getItem("flareeye-theme") !== "light";
-  });
+  const [eventTypeFilter, setEventTypeFilter] = useState("ALL");
+  const [persistentOnly, setPersistentOnly] = useState(false);
+  const [analysisRun, setAnalysisRun] = useState(0);
 
-  useEffect(() => {
-    localStorage.setItem("flareeye-theme", darkMode ? "dark" : "light");
-  }, [darkMode]);
+  // Each analysis run simulates a new satellite observation batch.
+  // The prototype still uses prepared DEMO DATA, but values change between runs
+  // to demonstrate how a future live/trained model would react to new observations.
+  const runScenarios = [
+    { frp: 1.00, persistence: 0, wind: 0, abnormality: 0, optical: 0 },
+    { frp: 1.12, persistence: 6, wind: 3, abnormality: 5, optical: 2 },
+    { frp: 0.88, persistence: -8, wind: -2, abnormality: -6, optical: -3 },
+    { frp: 1.22, persistence: 10, wind: 5, abnormality: 9, optical: 4 },
+    { frp: 0.96, persistence: 14, wind: -4, abnormality: 3, optical: 1 },
+    { frp: 1.08, persistence: -4, wind: 7, abnormality: -2, optical: 5 },
+  ];
 
+  const currentScenario = runScenarios[analysisRun % runScenarios.length];
 
   const processedEvents = useMemo(() => {
     return eventSeeds.map((seed, index) => {
@@ -74,31 +84,35 @@ function App() {
         return dist < 2.5;
       });
 
-      const avgFrp =
+      const baseFrp =
         eventDetections.length > 0
           ? Math.round(
-              eventDetections.reduce(
-                (sum, d) => sum + d.frp,
-                0
-              ) / eventDetections.length
+              eventDetections.reduce((sum, d) => sum + d.frp, 0) /
+                eventDetections.length
             )
           : 40;
+
+      // Event-specific variation makes every run different without pretending
+      // that the current MVP is connected to a live satellite feed.
+      const eventVariation = index % 2 === 0 ? 1 : 0.94;
+      const avgFrp = Math.max(20, Math.round(baseFrp * currentScenario.frp * eventVariation));
+      const persistence = Math.max(15, Math.min(98, seed.persistence + currentScenario.persistence + (index * 2 - 4)));
+      const wind = Math.max(2, Math.round(seed.wind + currentScenario.wind + (index % 3) - 1));
+      const abnormality = Math.max(10, Math.min(98, seed.abnormality + currentScenario.abnormality + (index - 2) * 2));
+      const optical = Math.max(45, Math.min(99, seed.optical + currentScenario.optical - (index % 2)));
 
       const event = {
         ...seed,
         avgFrp,
+        persistence,
+        wind,
+        abnormality,
+        optical,
         detections: eventDetections.length,
       };
 
-      const classification = classifyEvent(
-        event,
-        eventDetections
-      );
-
-      const risk = calculateRisk(
-        event,
-        classification.label
-      );
+      const classification = classifyEvent(event, eventDetections);
+      const risk = calculateRisk(event, classification.label);
 
       return {
         ...event,
@@ -118,16 +132,15 @@ function App() {
             ? "#ffc107"
             : "#36d399",
         trend:
-          index === 0
+          persistence >= seed.persistence + 4
             ? "Increasing"
-            : index === 1
-            ? "Persistent"
-            : index === 2
+            : persistence <= seed.persistence - 4
             ? "Decreasing"
             : "Stable",
+        runNumber: analysisRun + 1,
       };
     });
-  }, []);
+  }, [analysisRun]);
 
   const filteredEvents = processedEvents.filter((event) => {
     const matchesSearch =
@@ -145,12 +158,20 @@ function App() {
       riskFilter === "ALL" ||
       event.riskLevel === riskFilter;
 
-    return matchesSearch && matchesRisk;
+    const matchesType =
+      eventTypeFilter === "ALL" ||
+      event.classification === eventTypeFilter;
+
+    const matchesPersistence =
+      !persistentOnly || event.persistence >= 70;
+
+    return matchesSearch && matchesRisk && matchesType && matchesPersistence;
   });
 
   const runAnalysis = () => {
     setRunning(true);
     setSelectedEvent(null);
+    setAnalysisRun((run) => run + 1);
 
     setTimeout(() => {
       const labels = dbscan(detections, 2.5, 3);
@@ -179,6 +200,62 @@ function App() {
       e.riskLevel === "CRITICAL"
   ).length;
 
+  const selectedRiskBreakdown = selectedEvent
+    ? {
+        persistence: Math.round(selectedEvent.persistence * 0.25),
+        thermal: Math.min(
+          25,
+          selectedEvent.avgFrp >= 100
+            ? 25
+            : selectedEvent.avgFrp >= 70
+            ? 20
+            : selectedEvent.avgFrp >= 40
+            ? 15
+            : 9
+        ),
+        proximity:
+          selectedEvent.facilityDistance < 1
+            ? 20
+            : selectedEvent.facilityDistance < 3
+            ? 16
+            : selectedEvent.facilityDistance < 10
+            ? 9
+            : 4,
+        abnormality: Math.round(selectedEvent.abnormality * 0.2),
+        environment:
+          selectedEvent.landCover === "Vegetation"
+            ? 7
+            : selectedEvent.landCover === "Cropland"
+            ? 6.5
+            : selectedEvent.landCover === "Built-up"
+            ? 7.5
+            : 5.5,
+      }
+    : null;
+
+  const eventClasses = [
+    "Industrial Fire",
+    "Gas Flare",
+    "Wildfire",
+    "Agricultural Burning",
+    "Industrial Heat",
+  ];
+
+  const analytics = {
+    avgRisk: Math.round(
+      processedEvents.reduce((sum, e) => sum + e.risk, 0) /
+        processedEvents.length
+    ),
+    avgConfidence: Math.round(
+      processedEvents.reduce((sum, e) => sum + e.confidence, 0) /
+        processedEvents.length
+    ),
+    avgPersistence: Math.round(
+      processedEvents.reduce((sum, e) => sum + e.persistence, 0) /
+        processedEvents.length
+    ),
+  };
+
   const distribution = processedEvents.reduce(
     (acc, event) => {
       acc[event.classification] =
@@ -190,7 +267,7 @@ function App() {
   );
 
   return (
-    <div className={`app ${darkMode ? "dark-mode" : "light-mode"}`}>
+    <div className="app">
       {/* SIDEBAR */}
       <aside className="sidebar">
         <div className="brand">
@@ -269,14 +346,6 @@ function App() {
             <span className="demo-badge">
               DEMO DATA
             </span>
-
-            <button
-              className="theme-toggle"
-              onClick={() => setDarkMode(!darkMode)}
-              title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-            >
-              {darkMode ? "☀️ Light" : "🌙 Dark"}
-            </button>
 
             <button
               className="reset-btn"
@@ -364,6 +433,25 @@ function App() {
                 <option value="LOW">Low</option>
               </select>
 
+              <select
+                value={eventTypeFilter}
+                onChange={(e) => setEventTypeFilter(e.target.value)}
+              >
+                <option value="ALL">All Classes</option>
+                {eventClasses.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                className={persistentOnly ? "toggle active" : "toggle"}
+                onClick={() => setPersistentOnly(!persistentOnly)}
+              >
+                ◷ Persistent ≥70%
+              </button>
+
               <button
                 className={
                   showFacilities
@@ -376,6 +464,20 @@ function App() {
               >
                 🏭 Facilities
               </button>
+
+              {(search || riskFilter !== "ALL" || eventTypeFilter !== "ALL" || persistentOnly) && (
+                <button
+                  className="toggle"
+                  onClick={() => {
+                    setSearch("");
+                    setRiskFilter("ALL");
+                    setEventTypeFilter("ALL");
+                    setPersistentOnly(false);
+                  }}
+                >
+                  Clear Filters
+                </button>
+              )}
             </section>
 
             {/* MAP + EVENTS */}
@@ -483,11 +585,19 @@ function App() {
                         }}
                       >
                         <Popup>
-                          <b>{event.id}</b>
-                          <br />
-                          {event.classification}
-                          <br />
-                          Risk: {event.risk}
+                          <div style={{ minWidth: "210px" }}>
+                            <h3 style={{ margin: "0 0 8px" }}>
+                              {event.id}
+                            </h3>
+                            <p><strong>Class:</strong> {event.classification}</p>
+                            <p><strong>Risk:</strong> {event.risk} ({event.riskLevel})</p>
+                            <p><strong>Confidence:</strong> {event.confidence}%</p>
+                            <p><strong>Persistence:</strong> {event.persistence}%</p>
+                            <p><strong>Avg FRP:</strong> {event.avgFrp} MW</p>
+                            <p style={{ marginBottom: 0 }}>
+                              <strong>Facility:</strong> {event.facility}
+                            </p>
+                          </div>
                         </Popup>
                       </CircleMarker>
                     ))}
@@ -702,6 +812,12 @@ function App() {
                     </strong>
                     <small>MW</small>
                   </div>
+
+                  <div className="metric-box">
+                    <span>WIND SPEED</span>
+                    <strong>{selectedEvent.wind}</strong>
+                    <small>km/h</small>
+                  </div>
                 </div>
 
                 <div className="evidence-grid">
@@ -765,6 +881,78 @@ function App() {
                       before assigning the class and risk
                       priority.
                     </p>
+                  </div>
+                </div>
+
+                <div className="event-intelligence-summary">
+                  <div className="mini-panel intelligence-summary">
+                    <div className="mini-panel-title">EVENT INTELLIGENCE SUMMARY</div>
+                    <p>
+                      <b>{selectedEvent.id}</b> is currently classified as <b>{selectedEvent.classification}</b> with <b>{selectedEvent.confidence}%</b> confidence.
+                      Its <b>{selectedEvent.persistence}%</b> persistence and average thermal power of <b>{selectedEvent.avgFrp} MW</b>
+                      {selectedEvent.facility !== "None"
+                        ? `, combined with a ${selectedEvent.facilityDistance} km proximity to ${selectedEvent.facility}, increase the likelihood of an industrial source.`
+                        : " and limited industrial proximity make an environmental or non-industrial source more plausible."}
+                    </p>
+                    <div className="intelligence-tags">
+                      <span>Risk {selectedEvent.risk}</span>
+                      <span>Wind {selectedEvent.wind} km/h</span>
+                      <span>Abnormality {selectedEvent.abnormality}%</span>
+                      <span>Optical {selectedEvent.optical}%</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="investigation-extra">
+                  <div className="mini-panel">
+                    <div className="mini-panel-title">RISK FACTOR BREAKDOWN</div>
+                    {selectedRiskBreakdown &&
+                      Object.entries(selectedRiskBreakdown).map(([key, value]) => (
+                        <div className="factor-row" key={key}>
+                          <span>
+                            {key === "thermal"
+                              ? "Thermal severity"
+                              : key === "proximity"
+                              ? "Facility proximity"
+                              : key.charAt(0).toUpperCase() + key.slice(1)}
+                          </span>
+                          <div className="factor-bar">
+                            <div style={{ width: `${Math.min(100, value * 4)}%` }} />
+                          </div>
+                          <b>{value}</b>
+                        </div>
+                      ))}
+                  </div>
+
+                  <div className="mini-panel">
+                    <div className="mini-panel-title">PERSISTENCE TIMELINE</div>
+                    <div className="timeline">
+                      {[25, 50, 75, 100].map((step, i) => (
+                        <div className="timeline-point" key={step}>
+                          <span
+                            className={selectedEvent.persistence >= step ? "point active" : "point"}
+                          />
+                          <small>
+                            T{i + 1}
+                            <br />
+                            {selectedEvent.persistence >= step ? "Detected" : "Not persistent"}
+                          </small>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mini-note">
+                      {selectedEvent.duration} hrs observed duration • {selectedEvent.persistence}% persistence
+                    </p>
+                  </div>
+
+                  <div className="mini-panel">
+                    <div className="mini-panel-title">ENVIRONMENTAL CONTEXT</div>
+                    <div className="context-list">
+                      <div><span>Land cover</span><b>{selectedEvent.landCover}</b></div>
+                      <div><span>Wind</span><b>{selectedEvent.wind} km/h</b></div>
+                      <div><span>Optical evidence</span><b>{selectedEvent.optical}%</b></div>
+                      <div><span>Abnormality</span><b>{selectedEvent.abnormality}%</b></div>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -853,6 +1041,43 @@ function App() {
               </div>
             </section>
 
+            {/* ANALYTICS */}
+            <section className="analytics-grid">
+              <div className="panel analytics-card">
+                <p className="eyebrow">SYSTEM ANALYTICS</p>
+                <h2>Run Overview</h2>
+                <div className="analytics-metrics">
+                  <div><span>Avg Risk</span><strong>{analytics.avgRisk}</strong></div>
+                  <div><span>Avg Confidence</span><strong>{analytics.avgConfidence}%</strong></div>
+                  <div><span>Avg Persistence</span><strong>{analytics.avgPersistence}%</strong></div>
+                  <div><span>High Priority</span><strong>{highRisk}</strong></div>
+                </div>
+              </div>
+
+              <div className="panel analytics-card">
+                <p className="eyebrow">SOURCE MIX</p>
+                <h2>Class Distribution</h2>
+                <div className="source-mix">
+                  {eventClasses.map((type) => {
+                    const count = distribution[type] || 0;
+                    return (
+                      <div className="source-mix-row" key={type}>
+                        <span>{type}</span>
+                        <div className="dist-bar">
+                          <div
+                            style={{
+                              width: `${(count / processedEvents.length) * 100}%`,
+                            }}
+                          />
+                        </div>
+                        <b>{count}</b>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
+
             {/* DBSCAN RESULT */}
             {analysisDone && (
               <section className="analysis-result">
@@ -860,7 +1085,7 @@ function App() {
                   <span>✓</span>
 
                   <div>
-                    <b>Analysis completed successfully</b>
+                    <b>Analysis run #{analysisRun} completed successfully</b>
                     <p>
                       Thermal anomalies were quality
                       screened, clustered into events,
